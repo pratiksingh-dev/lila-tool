@@ -1,4 +1,4 @@
-# ARCHITECTURE.md
+# Architecture
 
 ## What I built
 
@@ -8,48 +8,49 @@ A static web tool that lets level designers explore player behavior on LILA BLAC
 
 ## Tech stack
 
-| Layer | What | Why |
+| Layer | Technology | Why |
 |---|---|---|
-| Data pipeline | Python + pandas + pyarrow | Parquet files can't be read in a browser. One Python script converts them to JSON once, so the browser never has to wait for processing. |
-| Frontend | Vanilla HTML + JavaScript | No build step, no framework, no dependencies to break. Opens by dragging into a browser. |
-| Rendering | HTML5 Canvas | 89,000 events as SVG nodes would freeze the browser. Canvas draws pixels directly — renders the full dataset in under 100ms. |
-| Heatmaps | heatmap.js (CDN) | One script tag, zero config, identical output to building it manually at 10% of the effort. |
-| Hosting | Netlify (static) | No server to maintain, no downtime, loads fast from a CDN anywhere in the world. |
+| Data pipeline | Python · pandas · pyarrow | Parquet files can't be read in a browser. One script converts all files to JSON once — moving that cost to deploy time, not user time. |
+| Frontend | Vanilla HTML + JavaScript | No build step, no framework, no dependencies to break. Opens by dragging into a browser. Zero setup for whoever evaluates it. |
+| Rendering | HTML5 Canvas API | 89,000 events as SVG DOM nodes would freeze the browser. Canvas draws pixels directly and renders the full dataset in under 100ms. |
+| Heatmaps | heatmap.js v2.0.5 via cdnjs | Loaded from CDN at runtime — not bundled in the repo. One script tag, zero config. Requires internet for heatmap overlay. |
+| Hosting | Vercel (static) | Connected to GitHub repo. Every push auto-deploys. No server runtime, no downtime, global CDN. |
 
 ---
 
 ## How data flows
 
 ```
-.nakama-0 parquet files (one per player per match)
+.nakama-0 parquet files  (one file = one player in one match)
         ↓
-process_data.py  (run once locally)
-  - reads all files with pyarrow
-  - skips 0-byte files
-  - decodes event bytes → UTF-8
-  - detects bots: numeric user_id = bot, UUID = human
-  - normalizes timestamps per match (ts_rel = ts − match_start)
-  - applies coordinate formula → stores u, v (0–1 normalized)
-  - outputs per-map JSON files + match index
+scripts/process_data.py  — run once locally
+  1.  Glob all .nakama-0 files recursively across all date folders
+  2.  Skip 0-byte files  (one exists in the dataset — pyarrow crashes on empty files)
+  3.  Read with pyarrow, decode event bytes  →  UTF-8 string
+  4.  Detect bots: /^\d+$/ on user_id  (numeric = bot, UUID = human)
+  5.  Normalize timestamps per match: ts_rel = ts − min(ts)
+  6.  Apply coordinate formula  →  store u, v as normalized 0–1 floats
+  7.  Output per-map JSON files + match index
         ↓
 public/data/
-  matches.json               (796 matches, metadata)
-  events_AmbroseValley.json  (61k events)
-  events_GrandRift.json      (7k events)
-  events_Lockdown.json       (21k events)
+  matches.json                  796 matches, metadata only
+  events_AmbroseValley.json     61,013 events
+  events_GrandRift.json          6,853 events
+  events_Lockdown.json          21,238 events
         ↓
-Netlify CDN → browser
-  - loads matches.json on startup
-  - lazy-fetches map JSON only when that map is selected
-  - all filtering runs in memory — no re-fetching on filter changes
-  - canvas re-renders on every interaction
+Vercel CDN  →  browser
+  - Fetches matches.json on load  →  populates all dropdowns
+  - Lazy-fetches map JSON only when that map is selected
+  - All filtering runs in memory — no re-fetch on filter change
+  - Canvas re-renders on every interaction: filter, scrub, resize
+  - heatmap.js fetched from cdnjs for density overlay
 ```
 
 ---
 
 ## Coordinate mapping
 
-The README gives exact values per map:
+The README provides exact per-map configuration:
 
 | Map | Scale | Origin X | Origin Z |
 |---|---|---|---|
@@ -58,35 +59,35 @@ The README gives exact values per map:
 | Lockdown | 1000 | −500 | −500 |
 
 ```python
-# Convert world (x, z) → normalized UV (0 to 1)
-u = (x - origin_x) / scale
-v = (z - origin_z) / scale
+# Python pipeline — computed once, stored in JSON as u, v
+u = (x - origin_x) / scale          # normalized 0–1 horizontal
+v = (z - origin_z) / scale          # normalized 0–1 vertical
 
-# Convert UV → pixel position on canvas (any size)
+# JavaScript frontend — applied at render time
 pixel_x = u * canvas_width
 pixel_y = (1 - v) * canvas_height   # y-flip: image origin is top-left
 ```
 
-The u, v values are computed once in Python and stored in the JSON. The frontend just multiplies by canvas size — so the map renders correctly at any screen resolution without any recalculation.
+**Why store u, v and not pixels?** The frontend multiplies by the current canvas size at render time — so the map renders correctly at any screen resolution without recalculation.
 
-The y-flip on line 2 is essential. Game coordinates increase upward, screen coordinates increase downward. Without this, every event plots on the wrong half of the map.
+**Why the y-flip?** Game world coordinates increase upward (3D convention). Screen coordinates increase downward. Without inverting `v`, every event renders on the wrong half of the map.
 
-**Validation:** I sampled 200 events per map and checked each computed pixel against the minimap image. 100% of events land on actual map terrain, not the black border.
+**Validation:** Sampled 200 events per map and checked each computed pixel against the minimap image. 100% of events land on actual map terrain — zero in the black border region.
 
-**Note on image size:** The README says 1024×1024. The actual files are 2000×2000. Because the formula uses normalized UV coordinates, this makes no difference — the dot lands at the same relative position regardless of image dimensions.
+**Image size note:** The README documents minimaps as 1024×1024px. Actual files are 2000×2000px. Because the formula outputs normalized UV coordinates, image dimensions have zero effect on accuracy — the dot lands at the same relative position regardless of size.
 
 ---
 
 ## Assumptions
 
-| Ambiguity | What I found | How I handled it |
-|---|---|---|
-| event column type | Stored as bytes: `b'Position'` | Decoded with `.decode('utf-8')` in the pipeline |
-| Timestamps | `datetime64[ms]` but represent match-relative time, not wall-clock | Normalized per match: `ts_rel = ts − min(ts)` |
-| 0-byte file | One empty file exists in the dataset | Skipped with a file size check before reading |
-| Missing data | Only Feb 14 was in the provided zip | Pipeline handles any date range — other days load automatically when present |
-| Missing event types | Kill/Killed (human-vs-human) absent from Feb 14 | All 8 event types handled in code; they appear automatically with the full dataset |
-| Image size mismatch | README says 1024px, actual files are 2000px | UV coordinates are resolution-independent; no impact on accuracy |
+| What I found | How I handled it |
+|---|---|
+| `event` column stored as bytes: `b'Position'` | Decoded with `.decode('utf-8')` in pipeline |
+| Timestamps are match-relative ms, not wall-clock | Normalized per match: `ts_rel = ts − min(ts)`. Sort by ts_rel to reconstruct timeline. |
+| One 0-byte file in the dataset | `os.path.getsize()` check before read — skip and continue |
+| Only Feb 14 provided (not all 5 days) | Pipeline handles any date range dynamically. Other days load automatically when present. |
+| `Kill` / `Killed` events absent from Feb 14 | All 8 event types handled in code. Render automatically with the full dataset. |
+| Minimap images are 2000px, README says 1024px | UV normalization is size-independent. Documented and confirmed with validation. |
 
 ---
 
@@ -94,16 +95,19 @@ The y-flip on line 2 is essential. Game coordinates increase upward, screen coor
 
 | Decision | What I chose | What I gave up |
 |---|---|---|
-| Static JSON vs. live server | Static — faster, simpler, zero downtime | Can't query on demand; need to re-run pipeline for new data |
-| Per-map files vs. one combined file | Per-map — only fetch the map you need | Slightly more files to manage |
-| Canvas vs. SVG | Canvas — handles 89k events without freezing | Tooltip hit-testing has to be built manually |
-| Vanilla JS vs. React | Vanilla — no build step, opens anywhere | Less structured state management for complex interactions |
+| Static JSON vs. live API | Static — no runtime cost, instant loads, no downtime | Must re-run pipeline manually when new match data arrives |
+| Per-map files vs. one combined | Per-map lazy loading — only fetch what's needed | Three separate files to manage; each new map needs a new file |
+| Canvas vs. SVG | Canvas — 89k events with no DOM freeze | Tooltip hit-testing built manually; no native interactivity |
+| Vanilla JS vs. React | No build step, opens anywhere, zero setup | Less structured state management |
+| CDN for heatmap.js | Zero config, not bundled in repo | Heatmap overlay requires internet — won't render offline |
+| Aggregate timeline | Shows cross-match density patterns | Events from different matches appear simultaneously — not a perfect per-match replay |
 
 ---
 
 ## What I'd do with more time
 
-- **Named zone overlays** — Lockdown's minimap has labeled areas (Mine Pit, Gas Station, etc.). I'd make those clickable with per-zone stats.
-- **Day-over-day trend chart** — a small chart showing how kill density or zone coverage changes across Feb 10–14. Lets designers spot the impact of balance changes.
-- **Bot divergence score** — a single number measuring how differently bots move compared to humans. If it's high, bot sessions shouldn't be used for design testing.
-- **Automated pipeline** — a GitHub Action that runs `process_data.py` on a schedule and redeploys automatically. Currently it's a manual step.
+- **Named zone overlays** — Lockdown's minimap has labeled zones (Mine Pit, Gas Station, etc.). Clickable polygon boundaries with per-zone K/D/loot stats would let designers answer design questions directly on the map.
+- **Day-over-day trend chart** — a chart showing kill density or zone coverage shifting across Feb 10–14. Lets designers spot the impact of a balance change the day after it shipped.
+- **Bot divergence score** — a single metric: mean distance between bot and human movement centroids per map. Above threshold → automatically flag bot sessions as unreliable for design testing.
+- **Bundle heatmap.js locally** — remove the CDN dependency so the tool works fully offline.
+- **Automated pipeline** — GitHub Action running `process_data.py` on a schedule, committing updated JSON, triggering Vercel redeploy. Currently requires a manual step.
