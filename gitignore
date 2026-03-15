@@ -1,0 +1,25 @@
+# Raw gameplay data - stays on your laptop only
+player_data/
+players_data/
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.env
+venv/
+env/
+
+# Mac
+.DS_Store
+
+# Windows
+Thumbs.db
+desktop.ini
+
+# Editor
+.vscode/
+.idea/
+
+# Node (not used but just in case)
+node_modules/

@@ -1,0 +1,45 @@
+{
+  "total_events": 89104,
+  "total_matches": 796,
+  "total_human_players": 245,
+  "total_bots": 94,
+  "maps": [
+    "AmbroseValley",
+    "GrandRift",
+    "Lockdown"
+  ],
+  "dates": [
+    "February_10",
+    "February_11",
+    "February_12",
+    "February_13",
+    "February_14"
+  ],
+  "event_types": {
+    "Position": 51347,
+    "BotPosition": 21712,
+    "Loot": 12885,
+    "BotKill": 2415,
+    "BotKilled": 700,
+    "KilledByStorm": 39,
+    "Kill": 3,
+    "Killed": 3
+  },
+  "map_config": {
+    "AmbroseValley": {
+      "scale": 900,
+      "origin_x": -370,
+      "origin_z": -473
+    },
+    "GrandRift": {
+      "scale": 581,
+      "origin_x": -290,
+      "origin_z": -290
+    },
+    "Lockdown": {
+      "scale": 1000,
+      "origin_x": -500,
+      "origin_z": -500
+    }
+  }
+}
